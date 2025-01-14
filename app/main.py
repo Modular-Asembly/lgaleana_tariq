@@ -20,6 +20,8 @@ app.add_middleware(
 
 from app.models.Product import Product
 from app.models.Restaurant import Restaurant
+from app.models.SupplierType import SupplierType
+from app.models.RestaurantType import RestaurantType
 from app.models.Supplier import Supplier
 from app.models.Order import Order
 from app.services.product.list_products import router

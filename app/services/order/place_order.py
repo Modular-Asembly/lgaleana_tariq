@@ -1,64 +1,73 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from app.modassembly.database.sql.get_sql_session import get_sql_session
-from app.models.Order import Order
 from app.models.Product import Product
 from app.models.Restaurant import Restaurant
+from app.models.Order import Order
+from app.models.RestaurantType import RestaurantType
+from app.models.SupplierType import SupplierType
+from app.modassembly.database.sql.get_sql_session import get_sql_session
 
+# Define Pydantic models for input and output
+class OrderCreate(BaseModel):
+    restaurant_id: int
+    product_id: int
+    quantity: int
+
+class OrderConfirmation(BaseModel):
+    order_id: int
+    message: str
+
+# Create a FastAPI router
 router = APIRouter()
 
-class OrderInput(BaseModel):
-    restaurant_id: int
-    product_id: int
-    quantity: int
-
-class OrderOutput(BaseModel):
-    id: int
-    restaurant_id: int
-    product_id: int
-    quantity: int
-    total_price: float
-    status: str
-
-    class Config:
-        orm_mode = True
-
-@router.post("/orders", response_model=OrderOutput, summary="Place a new order")
-def place_order(order_input: OrderInput, db: Session = Depends(get_sql_session)) -> OrderOutput:
+@router.post("/orders/place", response_model=OrderConfirmation, summary="Place a new order")
+def place_order(order_data: OrderCreate, db: Session = Depends(get_sql_session)) -> OrderConfirmation:
     """
-    Place a new order in the database.
+    Place a new order in the database if the restaurant and supplier types are compatible.
 
     Args:
-        order_input (OrderInput): The input details for the order.
+        order_data (OrderCreate): The order details including restaurant ID, product ID, and quantity.
         db (Session): The database session.
 
     Returns:
-        OrderOutput: The details of the placed order.
+        OrderConfirmation: Confirmation of the placed order.
     """
-    # Validate restaurant
-    restaurant = db.query(Restaurant).filter(Restaurant.id == order_input.restaurant_id).first()
-    if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
+    # Retrieve the restaurant and product from the database
+    restaurant = db.query(Restaurant).filter(Restaurant.id == order_data.restaurant_id).first()
+    product = db.query(Product).filter(Product.id == order_data.product_id).first()
 
-    # Validate product
-    product = db.query(Product).filter(Product.id == order_input.product_id).first()
+    # Validate order details
+    if not restaurant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Restaurant not found")
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    if order_data.quantity <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Quantity must be greater than zero")
+
+    # Check compatibility between restaurant and supplier types
+    restaurant_type = db.query(RestaurantType).filter(RestaurantType.id == restaurant.restaurant_type_id).first()
+    supplier_type = db.query(SupplierType).filter(SupplierType.id == product.supplier_id).first()
+
+    if not restaurant_type or not supplier_type or restaurant_type.id != supplier_type.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incompatible restaurant and supplier types")
 
     # Calculate total price
-    total_price = product.price * order_input.quantity
+    total_price = product.price * order_data.quantity
 
-    # Create new order
+    # Create a new order
     new_order = Order(
-        restaurant_id=order_input.restaurant_id,
-        product_id=order_input.product_id,
-        quantity=order_input.quantity,
+        restaurant_id=restaurant.id.__int__(),
+        product_id=product.id.__int__(),
+        quantity=order_data.quantity,
         total_price=total_price,
         status="pending"
     )
+
+    # Add the new order to the database
     db.add(new_order)
     db.commit()
     db.refresh(new_order)
 
-    return OrderOutput.from_orm(new_order)
+    # Return order confirmation
+    return OrderConfirmation(order_id=new_order.id.__int__(), message="Order placed successfully")
